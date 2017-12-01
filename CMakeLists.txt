@@ -60,8 +60,9 @@ set(ALL_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${UPPER_BUILD_TYPE}}")
 
 message(STATUS "CXX_FLAGS: ${ALL_CXX_FLAGS}")
 
-set(CAF_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/actor-framework/build/")
-message("CAF_ROOT_DIR: ${CAF_ROOT_DIR}")
+if(NOT CAF_ROOT_DIR)
+  set(CAF_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/actor-framework/build/")
+endif()
 find_package(CAF COMPONENTS core io)
 if (CAF_FOUND)
   include_directories(${CAF_INCLUDE_DIRS})
