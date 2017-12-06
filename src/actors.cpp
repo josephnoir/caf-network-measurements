@@ -19,7 +19,7 @@ using shutdown_atom = caf::atom_constant<atom("shutdown")>;
 //  2 bytes annotation
 //  4 bytes sequence number
 //  8 bytes timestamp
-constexpr size_t message_overhead = 82 - 2 - 4 - 8;
+constexpr size_t message_overhead = io::basp::header_size - 2 - 4 - 8 + 28;
 
 constexpr auto interval = std::chrono::seconds(1);
 constexpr auto one = chrono::duration_cast<chrono::microseconds>(interval);
@@ -69,6 +69,7 @@ struct statistics {
   uint64_t received;
   uint32_t lost;
   uint32_t next;
+  uint32_t timeout;
 };
 
 behavior measureing_server(stateful_actor<statistics>* self);
@@ -85,12 +86,16 @@ behavior idle_server(stateful_actor<statistics>* self) {
       s.lost = 0;
       s.bytes = 0;
       s.next = 0;
+      s.timeout = 0;
       self->become(measureing_server(self));
       return start_atom::value;
     },
     [=](shutdown_atom) {
       self->quit();
     },
+    [=](reset_atom) {
+      // drop it
+    }
   };
 }
 
@@ -120,13 +125,24 @@ behavior measureing_server(stateful_actor<statistics>* self) {
     [=](reset_atom) {
       self->delayed_send(self, interval, reset_atom::value);
       auto& s = self->state;
-      aout(self) << "Received " << s.received << " received, lost "
-                 << (s.lost * 1.0 / s.received)
-                 << " --> " << (s.bytes / (1024.0 * 1024.0) )
-                 << " MBs/s" << std::endl;
-      s.received = 0;
-      s.bytes = 0;
-      s.lost = 0;
+      if (s.received == 0) {
+        ++s.timeout;
+        if (s.timeout == 3) {
+          aout(self) << "Returning to idle state!" << endl;
+          self->become(idle_server(self));
+        } else {
+          aout(self) << "No messages received ..." << endl;
+        }
+      } else {
+        aout(self) << "Received " << s.received << " received, lost "
+                   << (s.lost * 1.0 / s.received)
+                   << " --> " << (s.bytes / (1024.0 * 1024.0) )
+                   << " MBs/s" << std::endl;
+        s.received = 0;
+        s.bytes = 0;
+        s.lost = 0;
+        s.timeout = 0;
+      }
     },
     [=](shutdown_atom) {
       self->quit();
@@ -179,12 +195,10 @@ behavior sending_client(stateful_actor<c_state>* self) {
   return {
     [=](ping_atom) {
       auto& s = self->state;
-      /*
       if (s.seq % s.bundle == 0)
         self->delayed_send(self, s.timeout, ping_atom::value);
       else
-      */
-      self->send(self, ping_atom::value);
+        self->send(self, ping_atom::value);
       if (self->state.count < s.packets) {
         self->send(s.srv, s.payload, s.seq, caf::make_timestamp());
         ++s.count;
@@ -207,18 +221,17 @@ behavior sending_client(stateful_actor<c_state>* self) {
 
 void caf_main(actor_system& system, const config& cfg) {
   vector<char> payload(cfg.payload, 'a');
-  auto ts = caf::make_timestamp();
   if (cfg.debug) {
     vector<char> buf;
     binary_serializer sink{system, buf};
-    auto e = sink(payload, 1u, ts);
+    auto e = sink(payload, 1u, caf::make_timestamp());
     cout << "Message will be " << (buf.size() + caf::io::basp::header_size)
          << " bytes" << endl;
   } else {
     if (cfg.server) { // server
       auto s = system.spawn<detached>(idle_server);
-      auto ep = cfg.udp ? system.middleman().publish_udp(s, cfg.port)
-                        : system.middleman().publish(s, cfg.port);
+      auto ep = cfg.udp ? system.middleman().publish_udp(s, cfg.port, nullptr, true)
+                        : system.middleman().publish(s, cfg.port, nullptr, true);
       if (ep) {
         cout << "started server on port " << *ep << endl;
         system.await_all_actors_done();
@@ -238,7 +251,8 @@ void caf_main(actor_system& system, const config& cfg) {
       }
       system.spawn<detached>(handshake_client, std::move(*es), std::move(payload),
                              cfg.rate, cfg.bundle,
-                             caf::duration{(one * cfg.bundle / cfg.rate) / 2});
+                             //caf::duration{chrono::milliseconds{1}});
+                             caf::duration{(one * cfg.bundle / cfg.rate) * 2});
       /*
       auto sleep_time = one / cfg.rate;
       scoped_actor self{system};

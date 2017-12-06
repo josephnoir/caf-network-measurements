@@ -74,19 +74,32 @@ endif ()
 
 include_directories(. include)
 
-set(BROKER_SOURCES
-  src/brokers.cpp
+set(UDP_SOURCES
+  src/udp_brokers.cpp
+)
+set(TCP_SOURCES
+  src/tcp_brokers.cpp
 )
 set(ACTOR_SOURCES
   src/actors.cpp
 )
 file(GLOB_RECURSE HEADERS "include/*.hpp")
 
-add_executable(brokers
-  ${BROKER_SOURCES}
+add_executable(udp_brokers
+  ${UDP_SOURCES}
   ${HEADERS}
 )
-target_link_libraries(brokers
+target_link_libraries(udp_brokers
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+)
+
+add_executable(tcp_brokers
+  ${TCP_SOURCES}
+  ${HEADERS}
+)
+target_link_libraries(tcp_brokers
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
