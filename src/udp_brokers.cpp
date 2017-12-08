@@ -38,6 +38,7 @@ public:
   uint32_t rate = 1000;
   uint32_t bundle = 1;
   uint32_t payload = 1024;
+  uint32_t blocks = 10;
   config() {
     load<io::middleman>();
     set("middleman.enable-udp", true);
@@ -50,6 +51,7 @@ public:
       .add(rate, "rate,r", "set number of messages per second")
       .add(payload, "payload,p", "set payload of each message in bytes "
                                  "(default: 1024 bytes)")
+      .add(blocks, "blocks,B", "set number of 1s blocks to send (default: 10)")
       .add(is_server, "server,s", "start a server");
   }
 };
@@ -133,11 +135,14 @@ struct c_state {
   uint64_t seq;
   datagram_handle servant;
   stack<vector<char>> cache;
+  uint32_t blocks;
+  uint32_t current_block;
 };
 
 
 behavior client(stateful_broker<c_state>* self, const string& h, uint16_t p,
-                vector<char> payload, uint32_t packets, uint32_t bundle) {
+                vector<char> payload, uint32_t packets, uint32_t bundle,
+                uint32_t blocks) {
   auto& s = self->state;
   aout(self) << "remote endpoint at " << h << ":" << p << endl;
   // create endpoint to contact server
@@ -151,6 +156,8 @@ behavior client(stateful_broker<c_state>* self, const string& h, uint16_t p,
   // initialize state
   s.count = 0;
   s.seq = 0;
+  s.blocks = blocks;
+  s.current_block = 0;
   aout(self) << "targeting " << packets << " packets/s" << endl;
   for (uint32_t i = 0; i < (2 * bundle); ++i)
     self->send(self, ping_atom::value);
@@ -199,10 +206,15 @@ behavior client(stateful_broker<c_state>* self, const string& h, uint16_t p,
     },
     [=](reset_atom) {
       self->delayed_send(self, interval, reset_atom::value);
-      aout(self) << "sent " << self->state.count << " packets/s" << endl;
-      self->state.count = 0;
-      for (uint32_t i = 0; i < (2 * bundle); ++i)
-        self->send(self, ping_atom::value);
+      aout(self) << "sent " << self->state.count << " packets/s." << endl;
+      if (++self->state.current_block >= self->state.blocks) {
+        aout(self) << "Client quitting." << endl;
+        self->quit();
+      } else {
+        self->state.count = 0;
+        for (uint32_t i = 0; i < (2 * bundle); ++i)
+          self->send(self, ping_atom::value);
+      }
     },
     [=](datagram_servant_closed_msg&) {
       aout(self) << "ERROR: datagram servant closed" << endl;
@@ -233,7 +245,8 @@ void caf_main(actor_system& system, const config& cfg) {
     }
     vector<char> payload(cfg.payload - message_overhead, 'a');
     system.middleman().spawn_broker(client, cfg.host, cfg.port,
-                                    move(payload), cfg.rate, cfg.bundle);
+                                    move(payload), cfg.rate, cfg.bundle,
+                                    cfg.blocks);
   }
 }
 

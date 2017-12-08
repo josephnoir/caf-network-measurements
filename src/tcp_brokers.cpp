@@ -37,6 +37,7 @@ public:
   uint32_t rate = 1000;
   uint32_t bundle = 1;
   uint32_t payload = 1024;
+  uint32_t blocks = 10;
   config() {
     load<io::middleman>();
     set("middleman.enable-tcp", true);
@@ -49,6 +50,7 @@ public:
       .add(rate, "rate,r", "set number of messages per second")
       .add(payload, "payload,p", "set payload of each message in bytes "
                                  "(default: 1024 bytes)")
+      .add(blocks, "blocks,B", "set number of 1s blocks to send (default: 10)")
       .add(is_server, "server,s", "start a server");
   }
 };
@@ -151,13 +153,15 @@ struct c_state {
   uint32_t packets;
   uint32_t tmp; // track messages in bundle
   uint32_t bundle;
+  uint32_t blocks;
+  uint32_t current_block;
   connection_handle servant;
 };
 
 
-behavior client(stateful_broker<c_state>* self,
-                const string& host, uint16_t port,
-                uint32_t payload, uint32_t packets, uint32_t bundle) {
+behavior client(stateful_broker<c_state>* self, const string& host,
+                uint16_t port, uint32_t payload, uint32_t packets,
+                uint32_t bundle, uint32_t blocks) {
   auto es = self->add_tcp_scribe(host, port);
   if (!es) {
     cerr << "Failed to create client for " << host << ":" << port
@@ -173,6 +177,8 @@ behavior client(stateful_broker<c_state>* self,
   s.payload = vector<char>(payload, 'a');
   s.packets = packets;
   s.bundle = bundle;
+  s.blocks = blocks;
+  s.current_block = 0;
   return {
     [=](new_data_msg& msg) {
       auto& s = self->state;
@@ -212,9 +218,14 @@ behavior client(stateful_broker<c_state>* self,
     [=](reset_atom) {
       self->delayed_send(self, interval, reset_atom::value);
       aout(self) << "Sent " << self->state.count << " packets/s." << endl;
-      self->state.count = 0;
-      for (uint32_t i = 0; i < (2 * s.bundle); ++i)
-        self->send(self, ping_atom::value);
+      if (++self->state.current_block >= self->state.blocks) {
+        aout(self) << "Client quitting." << endl;
+        self->quit();
+      } else {
+        self->state.count = 0;
+        for (uint32_t i = 0; i < (2 * s.bundle); ++i)
+          self->send(self, ping_atom::value);
+      }
     },
     [=](shutdown_atom) {
       self->quit();
@@ -245,7 +256,7 @@ void caf_main(actor_system& system, const config& cfg) {
     }
     uint32_t payload = cfg.payload - message_overhead;
     system.middleman().spawn_broker(client, cfg.host, cfg.port,
-                                    payload, cfg.rate, cfg.bundle);
+                                    payload, cfg.rate, cfg.bundle, cfg.blocks);
   }
 }
 

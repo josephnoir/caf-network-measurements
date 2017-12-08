@@ -1,0 +1,45 @@
+#!/bin/bash
+if [[ $(id -u) == 0 ]]; then
+  echo "Do not start this script as root"
+  exit 0
+fi
+
+CAF_HOME="/home/localadmin/actor-framework"
+CAF_NET_HOME="/home/localadmin/caf-network-measurements"
+BENCH_USER="localadmin"
+FLAME_GRAPH_PATH="/home/localadmin/FlameGraph"
+BIN_PATH="${CAF_NET_HOME}/build/bin"
+OUT_DIR="/home/localadmin/caf-network-measurements/measurements"
+
+bench="udp_brokers"
+args="-r 200000"
+
+PERF_FILE="${OUT_DIR}/${bench}-perf.data"
+STACK_FILE="${OUT_DIR}/${bench}-stack.data"
+SVG_FILE="${OUT_DIR}/${bench}-flamegraph.svg"
+
+if [ "$1" != "run" ] && [ "$1" != "flamegraph" ]; then
+  echo "run $0 <run|flamegraph>"
+  echo "program stopped!"
+fi
+
+if [ "$1" == "run" ]; then
+  rm -f ${OUT_DIR}/*
+  sudo sh -c "echo 0 > /proc/sys/kernel/kptr_restrict" 
+  cd $BIN_PATH
+  sudo perf record -g --output=$PERF_FILE -- ./${bench} ${args}
+  sudo sh -c "echo 1 > /proc/sys/kernel/kptr_restrict" 
+fi
+
+if [ "$1" == "flamegraph" ]; then
+  sudo chown localadmin $PERF_FILE
+  cd $FLAME_GRAPH_PATH
+  perf script --input=$PERF_FILE | ./stackcollapse-perf.pl > $STACK_FILE
+  ./flamegraph.pl $STACK_FILE > $SVG_FILE
+fi
+
+duration=$SECONDS
+echo "duration: $(($duration / 3600))h $((($duration / 60) % 60))m $(($duration % 60))s"
+
+# --notes:
+# perf report --call-graph -G
